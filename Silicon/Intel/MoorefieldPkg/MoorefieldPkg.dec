@@ -20,9 +20,10 @@
   gMoorefieldTokenSpaceGuid.PcdIoApicBase|0xFEC00000|UINT32|0x00000008
   gMoorefieldTokenSpaceGuid.PcdIoApicSize|0x00000400|UINT32|0x00000009
 
-  ## IA-PC HPET register block
-  gMoorefieldTokenSpaceGuid.PcdHpetBase|0xFED00000|UINT32|0x0000000A
-  gMoorefieldTokenSpaceGuid.PcdHpetSize|0x00000400|UINT32|0x0000000B
+  ## IA-PC HPET register block, published in the HPET table and described by
+  ## the PNP0103 device in the board DSDT. Must stay in sync with the HPET
+  ## _CRS in Platforms/z00xsPkg/AcpiPlatformDxe/Dsdt.asl.
+
 
   ## SD host controller (mmc1, SD card slot) MMIO window
   gMoorefieldTokenSpaceGuid.PcdSdHostBase|0xFF3FA000|UINT32|0x00000003

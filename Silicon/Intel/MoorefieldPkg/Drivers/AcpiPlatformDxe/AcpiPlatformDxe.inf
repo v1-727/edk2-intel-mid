@@ -36,8 +36,6 @@
   gMoorefieldTokenSpaceGuid.PcdLocalApicSize    ## FixedAtBuild
   gMoorefieldTokenSpaceGuid.PcdIoApicBase       ## FixedAtBuild
   gMoorefieldTokenSpaceGuid.PcdIoApicSize       ## FixedAtBuild
-  gMoorefieldTokenSpaceGuid.PcdHpetBase         ## FixedAtBuild
-  gMoorefieldTokenSpaceGuid.PcdHpetSize         ## FixedAtBuild
   gMoorefieldTokenSpaceGuid.PcdPciMmcfgBase     ## FixedAtBuild
 
 [Depex]

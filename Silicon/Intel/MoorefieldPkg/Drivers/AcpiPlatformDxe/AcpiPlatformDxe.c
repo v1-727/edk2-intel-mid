@@ -1,8 +1,13 @@
 /** @file
   Moorefield (Silvermont / Z3580) platform ACPI table set.
 
-  Builds FACS, FADT, MADT, HPET and MCFG in memory and installs them with the board
-  DSDT. Hardware-reduced, so Windows starts the APs itself from the MADT.
+  Builds FACS, FADT, MADT and MCFG in memory and installs them with the
+  board DSDT, giving a hardware-reduced namespace enough for Windows to bring up
+  the four cores and the MMIO devices the DSDT describes. Windows starts the APs
+  itself with INIT/SIPI from the MADT; no firmware MP wake-up is involved.
+
+  FACS and DSDT are installed before FADT. AcpiTableDxe patches the FADT
+  FIRMWARE_CTRL and DSDT pointers itself, so they are left zero here.
 
   SPDX-License-Identifier: BSD-2-Clause-Patent
  **/
@@ -29,9 +34,12 @@
                         EFI_ACPI_6_5_LOW_POWER_S0_IDLE_CAPABLE)
 
 // GFX is a fixed-mode linear framebuffer from GOP, so there is no legacy VGA
-  // framebuffer to keep the OS away from. No CMOS RTC either.
+  // framebuffer to keep the OS away from. The CMOS RTC at I/O 0x70 is real on
+  // Anniedale, as on Tangier, so it is not declared absent.
+// There are no PCIe links on the SoC (every function is on the root bus), so
+  // the OS must not try to manage ASPM; U-Boot's Tangier FADT sets this too.
 #define MF_FADT_BOOT_ARCH_FLAGS  (EFI_ACPI_6_5_VGA_NOT_PRESENT | \
-                                  EFI_ACPI_6_5_CMOS_RTC_NOT_PRESENT)
+                                  EFI_ACPI_6_5_PCIE_ASPM_CONTROLS)
 
 // Tablet-class part: no S3/S4 and no legacy cooling or docking model.
 #define MF_PREFERRED_PM_PROFILE  EFI_ACPI_6_5_PM_PROFILE_TABLET
@@ -59,20 +67,6 @@ typedef struct {
 } MOOREFIELD_MADT;
 
 /**
-  ACPI 2.0+ "HPET" table; MdePkg has the signature but no structure, so it is
-  declared here. With a hardware-reduced FADT and no CMOS RTC this is the only
-  ACPI-visible time source, so without it ACPI.sys falls back to the APIC timer.
-**/
-typedef struct {
-  EFI_ACPI_DESCRIPTION_HEADER                 Header;
-  UINT32                                      SequenceNumber;
-  UINT16                                      MinimumTick;
-  EFI_ACPI_6_5_GENERIC_ADDRESS_STRUCTURE      BaseAddress;
-  UINT8                                       Flags;
-  UINT8                                       Reserved;
-} MOOREFIELD_HPET;
-
-/**
   ACPI "MCFG" table, one allocation. Lets Linux use the ECAM window that the
   PCI0 root bridge in Dsdt.asl reserves through its PDRC device.
 **/
@@ -83,12 +77,6 @@ typedef struct {
   EFI_ACPI_MEMORY_MAPPED_ENHANCED_CONFIGURATION_SPACE_BASE_ADDRESS_ALLOCATION_STRUCTURE  Segment;
 } MOOREFIELD_MCFG;
 #pragma pack()
-
-#define MF_HPET_REVISION  0x01
-
-// Flags bit 0 is the only defined bit: clear means system memory, matching how
-  // the PNP0103 _CRS in Dsdt.asl describes 0xFED00000.
-#define MF_HPET_FLAGS  0x00
 
 STATIC CONST EFI_ACPI_6_5_FIRMWARE_ACPI_CONTROL_STRUCTURE  mFacs = {
   .Signature = EFI_ACPI_6_5_FIRMWARE_ACPI_CONTROL_STRUCTURE_SIGNATURE,
@@ -152,34 +140,6 @@ STATIC CONST MOOREFIELD_MADT  mMadt = {
   }
 };
 
-// The HPET table carries only the address; PcdHpetSize is the size other modules
-// use, and it must match the PNP0103 _CRS in Dsdt.asl.
-STATIC CONST MOOREFIELD_HPET  mHpet = {
-  .Header = {
-    .Signature       = EFI_ACPI_6_5_HIGH_PRECISION_EVENT_TIMER_TABLE_SIGNATURE,
-    .Length          = sizeof (MOOREFIELD_HPET),
-    .Revision        = MF_HPET_REVISION,
-    .OemId           = MF_OEM_ID,
-    .OemTableId      = MF_OEM_TABLE_ID,
-    .OemRevision     = 0x00000001,
-    .CreatorId       = SIGNATURE_32 ('I', 'N', 'T', 'L'),
-    .CreatorRevision = 0x000C0000
-  },
-  .SequenceNumber = 0x00000000,
-  // Counter tick in 1e-7 s units: 1 means 10 MHz (100 ns). Advisory, since the OS
-  // reads the true period from the counter's capability register.
-  .MinimumTick = 0x0001,
-  .BaseAddress = {
-    .AddressSpaceId     = EFI_ACPI_6_5_SYSTEM_MEMORY,
-    .RegisterBitWidth   = 32,
-    .RegisterBitOffset  = 0,
-    .AccessSize         = 4,
-    .Address            = FixedPcdGet64 (PcdHpetBase)
-  },
-  .Flags    = MF_HPET_FLAGS,
-  .Reserved = 0
-};
-
 // One segment, bus 0 only, matching the SFI MCFG table on the device. Bus 0 is
   // 1 MB of ECAM space, which is what PDRC in Dsdt.asl reserves.
 STATIC CONST MOOREFIELD_MCFG  mMcfg = {
@@ -199,7 +159,7 @@ STATIC CONST MOOREFIELD_MCFG  mMcfg = {
     .StartBusNumber             = 0,
     .EndBusNumber               = 0
   }
-};
+}; 
 
 /**
   Fill in the 8-bit checksum of a writable ACPI table. AcpiTableDxe recomputes this
@@ -398,11 +358,6 @@ AcpiPlatformEntryPoint (
     return Status;
   }
 
-  Status = MfInstallTemplate (AcpiTable, (CONST EFI_ACPI_DESCRIPTION_HEADER *)&mHpet);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
   Status = MfInstallTemplate (AcpiTable, (CONST EFI_ACPI_DESCRIPTION_HEADER *)&mMcfg);
   if (EFI_ERROR (Status)) {
     return Status;
@@ -412,13 +367,10 @@ AcpiPlatformEntryPoint (
   return EFI_SUCCESS;
 }
 
-// The HPET table is 0x38 bytes by definition and its Generic Address Structure
-// must be 8-byte aligned inside it, which only holds given the field order above.
+// MCFG: 36-byte header, 8 reserved bytes, one 16-byte segment entry. This is the
+// same 0x3C-byte table the SFI MCFG on the device and U-Boot's Tangier
+// acpi_fill_mcfg() produce.
 STATIC_ASSERT (
-  sizeof (MOOREFIELD_HPET) == 0x38,
-  "HPET table must be 0x38 bytes"
-  );
-STATIC_ASSERT (
-  OFFSET_OF (MOOREFIELD_HPET, BaseAddress) == 0x2A,
-  "HPET Generic Address Structure must start at offset 0x2A"
+  sizeof (MOOREFIELD_MCFG) == 0x3C,
+  "MCFG table must be 0x3C bytes"
   );
